@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard KIB B - DINAS PENDIDIKAN DAN KEBUDAYAAN</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 10px; background-color: #f9fafb; }
+    h1 { font-size: 1.5rem; margin-bottom: 10px; text-align: center; }
+    h2 { font-size: 1.2rem; margin-top: 20px; }
+    .dashboard { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
+    .chart-container, table { background: white; border-radius: 8px; padding: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    .chart-container { flex: 1 1 300px; }
+    canvas { width: 100% !important; height: 250px !important; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 6px; text-align: left; vertical-align: top; }
+    th { background-color: #3b82f6; color: white; font-size: 0.8rem; }
+    .last-update { font-size: 0.8rem; color: #555; margin-top: 5px; }
+    .search-box { margin: 10px 0; }
+    .search-box input { padding: 6px 10px; width: 100%; max-width: 300px; border: 1px solid #ccc; border-radius: 6px; }
+  </style>
+</head>
+<body>
+
+  <h1>Dashboard KIB B - DINAS PENDIDIKAN DAN KEBUDAYAAN</h1>
+
+  <div class="dashboard">
+    <div class="chart-container">
+      <h2>Rekap Konfirmasi Keberadaan (Kabupaten)</h2>
+      <canvas id="rekapKonfirmasi"></canvas>
+    </div>
+    <div class="chart-container">
+      <h2>Rekap Kondisi Barang (Kabupaten)</h2>
+      <canvas id="rekapKondisi"></canvas>
+    </div>
+    <div class="chart-container">
+      <h2>Rekap Nilai Perolehan per Kondisi (Kabupaten)</h2>
+      <canvas id="rekapNilai"></canvas>
+    </div>
+  </div>
+
+  <h2>Rekap Per Kecamatan</h2>
+  <div id="lastUpdate" class="last-update">Memuat data...</div>
+
+  <!-- kotak pencarian -->
+  <div class="search-box">
+    <input type="text" id="searchInput" placeholder="Cari sekolah atau kecamatan...">
+  </div>
+
+  <table id="rekapTable">
+    <thead>
+      <tr>
+        <th>Kecamatan</th>
+        <th>Nama Sekolah</th>
+        <th>Ditemukan</th>
+        <th>Tidak Ditemukan</th>
+        <th>Baik</th>
+        <th>Rusak Ringan</th>
+        <th>Rusak Berat</th>
+        <th>Nilai Perolehan (Rp)</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+    <tfoot>
+      <tr style="font-weight:bold; background:#e5e7eb;">
+        <td>Total</td>
+        <td>-</td>
+        <td id="totalDitemukan">0</td>
+        <td id="totalTidakDitemukan">0</td>
+        <td id="totalBaik">0</td>
+        <td id="totalRusakRingan">0</td>
+        <td id="totalRusakBerat">0</td>
+        <td id="totalNilai">0</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <script>
+  // daftar kecamatan + endpoint (disingkat di sini, tetap sama seperti sebelumnya)
+  const kecamatanEndpoints = {
+    "Banawa": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRd8vIhHDUbmD6I2aXLX7-_Ysemt2aXA__wKNGoKN0XWWSWCScv5aSmx06H0xkl8g/pub?gid=1917777904&single=true&output=csv",
+    "Banawa Tengah": "https://docs.google.com/spreadsheets/d/e/2PACX-1vRnykw5e_i3dwBIeTua-mpFExEJ4w6hROJ5F6OUHiiGpbtunldeKgXlhN_G-D1V8w/pub?gid=1454720232&single=true&output=csv",
+    // ... dst kecamatan lain
+  };
+
+  let chartKonfirmasi, chartKondisi, chartNilai;
+
+  async function fetchData(url) {
+    return new Promise((resolve) => {
+      if (!url) return resolve([]);
+      Papa.parse(url, {
+        download: true,
+        header: true,
+        complete: (results) => resolve(results.data)
+      });
+    });
+  }
+
+  async function updateRekapKecamatan() {
+    const tbody = document.querySelector("#rekapTable tbody");
+    tbody.innerHTML = "";
+
+    let total = { Ditemukan:0, Tidak:0, Baik:0, Ringan:0, Berat:0, Nilai:0 };
+    let nilaiKondisi = { Baik:0, Ringan:0, Berat:0 };
+
+    for (const [nama, url] of Object.entries(kecamatanEndpoints)) {
+      const data = await fetchData(url);
+      let ditemukan=0, tidak=0, baik=0, ringan=0, berat=0, nilai=0;
+      let nilaiBaik=0, nilaiRingan=0, nilaiBerat=0;
+
+      // kumpulkan nama sekolah unik
+      let sekolahSet = new Set();
+      data.forEach(row=>{
+        const sekolah = row["Nama Sekolah"] || row["Sekolah"];
+        if (sekolah) sekolahSet.add(sekolah.trim());
+      });
+      const daftarSekolah = Array.from(sekolahSet).join("<br>") || "-";
+
+      data.forEach(row=>{
+        const k = row["Konfirmasi Keberadaan"] || "Tidak Ditemukan";
+        const c = row["Kondisi"] || "Baik";
+        const v = parseFloat(row["Harga Perolehan"] || row["Nilai Perolehan"] || 0);
+
+        if(k==="Ditemukan") ditemukan++; else tidak++;
+        if(c==="Baik") { baik++; nilaiBaik+=v; }
+        else if(c==="Rusak Ringan") { ringan++; nilaiRingan+=v; }
+        else if(c==="Rusak Berat") { berat++; nilaiBerat+=v; }
+        nilai += v;
+      });
+
+      total.Ditemukan+=ditemukan;
+      total.Tidak+=tidak;
+      total.Baik+=baik;
+      total.Ringan+=ringan;
+      total.Berat+=berat;
+      total.Nilai+=nilai;
+
+      nilaiKondisi.Baik += nilaiBaik;
+      nilaiKondisi.Ringan += nilaiRingan;
+      nilaiKondisi.Berat += nilaiBerat;
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${nama}</td>
+                      <td>${daftarSekolah}</td>
+                      <td>${ditemukan}</td>
+                      <td>${tidak}</td>
+                      <td>${baik}</td>
+                      <td>${ringan}</td>
+                      <td>${berat}</td>
+                      <td>${nilai.toLocaleString("id-ID")}</td>`;
+      tbody.appendChild(tr);
+    }
+
+    // update total
+    document.getElementById("totalDitemukan").textContent = total.Ditemukan;
+    document.getElementById("totalTidakDitemukan").textContent = total.Tidak;
+    document.getElementById("totalBaik").textContent = total.Baik;
+    document.getElementById("totalRusakRingan").textContent = total.Ringan;
+    document.getElementById("totalRusakBerat").textContent = total.Berat;
+    document.getElementById("totalNilai").textContent = total.Nilai.toLocaleString("id-ID");
+
+    // update waktu
+    document.getElementById("lastUpdate").textContent = "Data terakhir diperbarui: " + new Date().toLocaleTimeString();
+  }
+
+  // pencarian
+  document.getElementById("searchInput").addEventListener("keyup", function(){
+    const filter = this.value.toLowerCase();
+    const rows = document.querySelectorAll("#rekapTable tbody tr");
+    rows.forEach(row=>{
+      const text = row.innerText.toLowerCase();
+      row.style.display = text.includes(filter) ? "" : "none";
+    });
+  });
+
+  // jalankan
+  updateRekapKecamatan();
+  setInterval(updateRekapKecamatan, 300000);
+  </script>
+
+</body>
+</html>
